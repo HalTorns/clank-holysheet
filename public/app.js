@@ -477,345 +477,73 @@ async function projects() {
   if (!ps.length) c.append(el("p", "Le premier projet commence ici.", "empty"));
   $("#content").append(c);
 }
-let settingsSection = "tickets";
+let settingsDirty = false;
 async function settings() {
-  [config, resources] = await Promise.all([api("/config"), api("/resources")]);
-  const actions = el("div", undefined, "toolbar");
-  actions.append(
-    button("Enregistrer", async () => {
-      await api("/config", "PUT", config);
-      notify(
-        "Configuration enregistrée. Republiez le panneau si ses thèmes ont changé.",
-      );
-    }),
-    button(
-      "Publier / actualiser le panneau",
-      async () => {
-        await api("/panel", "POST", {});
-        notify("Panneau publié sur Discord.");
-      },
-      "secondary",
-    ),
-    button(
-      "Installer les espaces Holysheet",
-      async () => {
-        if (
-          !confirm(
-            "Créer les rôles et espaces Holysheet manquants à côté de l’existant ?",
-          )
-        )
-          return;
-        await api("/setup", "POST", {});
-        notify("Espaces créés. Attribuez les rôles aux membres dans Discord.");
-        await render();
-      },
-      "secondary",
-    ),
-  );
-  $("#content").append(actions);
-  const roles = card("Accès au dashboard"),
-    row = el("div", undefined, "row");
-  for (const [key, title] of [
-    ["teamRoleId", "Équipe"],
-    ["supportRoleId", "Support"],
-    ["adminRoleId", "Admin"],
-  ])
-    row.append(
-      label(
-        title,
-        select(
-          [{ id: "", name: "Choisir un rôle" }, ...resources.roles],
-          config[key],
-          (v) => (config[key] = v),
-        ),
-      ),
-    );
-  const destinations = card("Destinations des tickets"),
-    destinationsRow = el("div", undefined, "row");
-  for (const [key, title, type] of [
-    ["panelChannelId", "Salon du panneau", 0],
-    ["ticketCategoryId", "Catégorie des tickets", 4],
-  ])
-    destinationsRow.append(
-      label(
-        title,
-        select(
-          [
-            { id: "", name: "Choisir une destination" },
-            ...resources.channels.filter((c) => c.type === type),
-          ],
-          config[key],
-          (v) => (config[key] = v),
-        ),
-      ),
-    );
-  destinations.append(
-    destinationsRow,
-    el(
-      "p",
-      "Les archives restent dans la base de Clank. Aucun salon d’archives Discord n’est utilisé.",
-      "muted",
-    ),
-  );
-  $("#content").append(destinations);
-  roles.append(
-    row,
-    el(
-      "p",
-      "Les rôles servent à l’accès aux espaces Holysheet. Attribuez-les aux personnes concernées depuis Discord. Le rôle Admin Clank n’accorde pas la permission Administrateur Discord.",
-      "muted",
-    ),
-  );
-  $("#content").append(roles);
-  const panel = card("Panneau de support");
-  panel.append(
-    label(
-      "Titre",
-      input(config.panelTitle, (v) => (config.panelTitle = v)),
-    ),
-    label(
-      "Message",
-      input(
-        config.panelDescription,
-        (v) => (config.panelDescription = v),
-        "textarea",
-      ),
-    ),
-  );
-  $("#content").append(panel);
-  const themes = card("Thèmes et catégories");
-  function drawThemes() {
-    list.replaceChildren();
-    config.themes.forEach((t, i) => {
-      const row = el("div", undefined, "editable");
-      row.append(
-        label(
-          "Thème",
-          input(t.name, (v) => (t.name = v)),
-        ),
-        label(
-          "Destination",
-          select(
-            [
-              { id: "", name: "Catégorie par défaut" },
-              ...resources.channels.filter((c) => c.type === 4),
-            ],
-            t.categoryId,
-            (v) => (t.categoryId = v),
-          ),
-        ),
-        button(
-          "Retirer",
-          () => {
-            config.themes.splice(i, 1);
-            drawThemes();
-          },
-          "secondary",
-        ),
-      );
-      list.append(row);
-    });
-  }
-  const list = el("div");
-  drawThemes();
-  themes.append(
-    list,
-    button(
-      "+ Ajouter un thème",
-      () => {
-        if (config.themes.length >= 25) throw Error("25 thèmes maximum.");
-        config.themes.push({
-          id: crypto.randomUUID().slice(0, 8),
-          name: "Nouveau thème",
-          categoryId: "",
-        });
-        drawThemes();
-      },
-      "secondary",
-    ),
-  );
-  $("#content").append(themes);
-  const fields = card("Formulaire des tickets");
-  fields.append(
-    el(
-      "p",
-      "Le thème est choisi avant le formulaire. Jusqu’à cinq champs texte ; titre et description sont obligatoires.",
-      "muted",
-    ),
-  );
-  const fl = el("div");
-  function drawFields() {
-    fl.replaceChildren();
-    config.fields.forEach((f, i) => {
-      const r = el("div", undefined, "field-row"),
-        fixed = ["title", "description"].includes(f.id),
-        check = input("", null, "checkbox");
-      check.checked = f.required;
-      check.disabled = fixed;
-      check.onchange = () => (f.required = check.checked);
-      r.append(
-        label(
-          "Libellé",
-          input(f.label, (v) => (f.label = v)),
-        ),
-        label(
-          "Format",
-          select(
-            [
-              { id: "short", name: "Texte court" },
-              { id: "paragraph", name: "Texte long" },
-            ],
-            f.style,
-            (v) => (f.style = v),
-          ),
-        ),
-        label("Obligatoire", check),
-      );
-      if (!fixed)
-        r.append(
-          button(
-            "Retirer ce champ",
-            () => {
-              config.fields.splice(i, 1);
-              drawFields();
-            },
-            "secondary",
-          ),
-        );
-      fl.append(r);
-    });
-  }
-  drawFields();
-  fields.append(
-    fl,
-    button(
-      "+ Ajouter un champ",
-      () => {
-        if (config.fields.length >= 5)
-          throw Error("Discord accepte cinq champs maximum.");
-        config.fields.push({
-          id: crypto.randomUUID().slice(0, 8),
-          label: "Nouveau champ",
-          required: false,
-          style: "short",
-        });
-        drawFields();
-      },
-      "secondary",
-    ),
-  );
-  $("#content").append(fields);
-  const template = card("Template des futurs projets");
-  template.append(
-    el(
-      "p",
-      "Toute l’équipe peut participer. Le créateur peut gérer et supprimer son projet. Les modifications du template s’appliquent aux nouveaux projets.",
-      "muted",
-    ),
-  );
-  const pl = el("div");
-  function drawProjects() {
-    pl.replaceChildren();
-    config.projectChannels.forEach((p, i) => {
-      const r = el("div", undefined, "field-row");
-      r.append(
-        label(
-          "Nom du salon",
-          input(p.name, (v) => (p.name = v)),
-        ),
-        label(
-          "Type",
-          select(
-            [
-              { id: "text", name: "Texte" },
-              { id: "voice", name: "Vocal" },
-            ],
-            p.type,
-            (v) => (p.type = v),
-          ),
-        ),
-        label(
-          "Description",
-          input(p.description, (v) => (p.description = v)),
-        ),
-        button(
-          "Retirer",
-          () => {
-            config.projectChannels.splice(i, 1);
-            drawProjects();
-          },
-          "secondary",
-        ),
-      );
-      pl.append(r);
-    });
-  }
-  drawProjects();
-  template.append(
-    pl,
-    button(
-      "+ Ajouter un salon",
-      () => {
-        config.projectChannels.push({
-          name: "nouveau-salon",
-          type: "text",
-          description: "",
-        });
-        drawProjects();
-      },
-      "secondary",
-    ),
-  );
-  $("#content").append(template);
-  const groups = {
-    access: [roles],
-    tickets: [destinations, panel, themes, fields],
-    projects: [template],
-    installation: [],
-  };
-  const help = card("Installation des espaces");
-  help.append(
-    el(
-      "p",
-      "Crée les espaces Holysheet manquants à côté de l’existant. Les rôles restent à attribuer dans Discord. Les anciens salons d’archives ne sont pas supprimés automatiquement.",
-      "muted",
-    ),
-  );
-  $("#content").append(help);
-  groups.installation.push(help);
-  const sections = el("div", undefined, "toolbar settings-tabs");
-  const applySection = () => {
-    Object.entries(groups).forEach(([key, cards]) =>
-      cards.forEach((c) => (c.hidden = key !== settingsSection)),
-    );
-    sections
-      .querySelectorAll("button")
-      .forEach((b) =>
-        b.classList.toggle("active", b.dataset.section === settingsSection),
-      );
-    actions.children[1].hidden = settingsSection !== "tickets";
-    actions.children[2].hidden = settingsSection !== "installation";
-  };
-  for (const [key, title] of [
-    ["tickets", "Tickets"],
-    ["projects", "Templates projets"],
-    ["access", "Accès"],
-    ["installation", "Installation"],
-  ]) {
-    const b = button(
-      title,
-      () => {
-        settingsSection = key;
-        applySection();
-      },
-      "secondary",
-    );
-    b.dataset.section = key;
-    sections.append(b);
-  }
-  $("#content").prepend(sections);
-  applySection();
+  const { mountSettings } = await import("/settings.js");
+  await mountSettings({
+    host: $("#content"),
+    api,
+    el,
+    card,
+    label,
+    input,
+    select,
+    button,
+    notify,
+    onDirty: (value) => (settingsDirty = value),
+  });
 }
+function confirmDiscard(message) {
+  return new Promise((resolve) => {
+    const dialog = el("dialog", undefined, "unsaved-dialog");
+    dialog.setAttribute("aria-labelledby", "unsaved-title");
+    const title = el("h2", "Modifications non enregistrées");
+    title.id = "unsaved-title";
+    const finish = (answer) => {
+      dialog.close();
+      dialog.remove();
+      resolve(answer);
+    };
+    const actions = el("div", undefined, "toolbar");
+    const stay = button(
+      "Rester sur la configuration",
+      () => finish(false),
+      "secondary",
+    );
+    actions.append(
+      stay,
+      button("Continuer sans enregistrer", () => finish(true)),
+    );
+    dialog.append(title, el("p", message), actions);
+    dialog.addEventListener("cancel", (event) => {
+      event.preventDefault();
+      finish(false);
+    });
+    document.body.append(dialog);
+    dialog.showModal();
+    stay.focus();
+  });
+}
+async function navigate(next) {
+  if (
+    view === "settings" &&
+    settingsDirty &&
+    !(await confirmDiscard(
+      "Vos modifications seront perdues si vous quittez cet écran.",
+    ))
+  )
+    return;
+  settingsDirty = false;
+  view = next;
+  selectedTicket = null;
+  return render();
+}
+window.addEventListener("beforeunload", (event) => {
+  if (settingsDirty) {
+    event.preventDefault();
+    event.returnValue = "";
+  }
+});
 async function audit() {
   const rows = await api("/audit"),
     c = card("Dernières opérations");
@@ -853,17 +581,21 @@ async function init() {
         : []),
     ];
     tabs.forEach(([key, title]) => {
-      const b = button(title, () => {
-        view = key;
-        selectedTicket = null;
-        return render();
-      });
+      const b = button(title, () => navigate(key));
       b.dataset.view = key;
       $("#nav").append(b);
     });
     $("#logout").onclick = async () => {
+      if (
+        settingsDirty &&
+        !(await confirmDiscard(
+          "Vos modifications seront perdues si vous vous déconnectez.",
+        ))
+      )
+        return;
       try {
         await api("/logout", "POST", {});
+        settingsDirty = false;
         location.reload();
       } catch (e) {
         notify(e.message);

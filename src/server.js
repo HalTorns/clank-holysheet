@@ -8,6 +8,7 @@ import { createStore, validateConfig } from "./store.js";
 import { createBot } from "./bot.js";
 import { canReadTicket } from "./tickets.js";
 import { describeAudit } from "./audit.js";
+import { persistConfiguration } from "./configuration.js";
 import { discordErrorInfo, logDiscordError } from "./discord-errors.js";
 import { PermissionFlagsBits as P, ChannelType } from "discord.js";
 
@@ -254,9 +255,15 @@ app.put(
       throw Error(
         "Les rôles Support/Admin ne peuvent pas être changés après création de tickets ; migrez les permissions avant de modifier la configuration.",
       );
-    store.saveConfig(c);
-    store.audit(req.actor.id, "config.update");
-    res.json({ ok: true, panelNeedsPublish: true });
+    res.json(
+      await persistConfiguration({
+        store,
+        bot,
+        config: c,
+        actor: req.actor.id,
+        publish: req.query.publish === "1",
+      }),
+    );
   }),
 );
 app.get(
@@ -336,13 +343,11 @@ app.get("/api/tickets/:id/archive", (req, res) => {
   const t = store.ticket(Number(req.params.id));
   if (!canReadTicket(req.actor, t) || t.status !== "closed")
     return res.status(404).json({ error: "Archive introuvable." });
-  res
-    .attachment(`ticket-${t.id}.json`)
-    .json({
-      ticket: t,
-      messages: store.messages(t.id),
-      responses: store.responses(t.id),
-    });
+  res.attachment(`ticket-${t.id}.json`).json({
+    ticket: t,
+    messages: store.messages(t.id),
+    responses: store.responses(t.id),
+  });
 });
 app.post(
   "/api/tickets/:id/accept",

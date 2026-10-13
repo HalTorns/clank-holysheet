@@ -1,4 +1,7 @@
 const actions = {
+  "panel.publish": "Panneau des tickets actualisé dans Discord",
+  "panel.publish_failed":
+    "Réglages enregistrés — publication du panneau à réessayer",
   "ticket.create": "Ticket ouvert par le demandeur",
   "server.setup": "Espaces Holysheet installés",
   "config.update": "Configuration enregistrée",

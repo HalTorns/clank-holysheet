@@ -3,6 +3,7 @@ import {
   createTicketService,
   ticketControls,
   responseTypes,
+  ticketChannelName,
 } from "./tickets.js";
 import {
   Client,
@@ -463,10 +464,11 @@ export function createBot(store, env) {
           const id = Number(result.lastInsertRowid);
           store.audit(i.user.id, `ticket.create:${id}`);
           try {
+            await channel.setName(ticketChannelName(id, answers.title));
             const m = await channel.send({
               embeds: [
                 new EmbedBuilder()
-                  .setTitle(`#${id} · ${answers.title}`)
+                  .setTitle(`Ticket #${String(id).padStart(4, '0')} ${answers.title}`)
                   .setColor(0xb5f36c)
                   .addFields(
                     c.fields.map((f) => ({

@@ -1,9 +1,9 @@
-# Mise à jour Clank — tickets et archives
+# Mise à jour Clank 0.3 — configuration simplifiée, tickets et archives
 
 ## Installation sur la version déjà déployée
 
 1. Sauvegardez le volume Coolify `/app/data` avant la mise à jour (base et pièces jointes). Ne supprimez ni le volume ni la base.
-2. Décompressez l’archive de la nouvelle version. Sur GitHub, remplacez les dossiers **src** et **public**, et mettez à jour **package.json**, **README.md**, **UPGRADE.md** et les tests si vous les utilisez. Ajoutez tous les nouveaux fichiers présents dans ces dossiers : `tickets.js`, `attachments.js`, `audit.js` notamment. Vous pouvez importer tout le contenu de l’archive à la racine du dépôt ; elle ne contient ni secrets ni données.
+2. Décompressez l’archive de la nouvelle version. Sur GitHub, remplacez les dossiers **src** et **public**, et mettez à jour **package.json**, **README.md**, **UPGRADE.md** et les tests si vous les utilisez. Ajoutez tous les nouveaux fichiers présents dans ces dossiers : `tickets.js`, `attachments.js`, `audit.js`, `configuration.js` et `public/settings.js` notamment. Vous pouvez importer tout le contenu de l’archive à la racine du dépôt ; elle ne contient ni secrets ni données.
 3. Redéployez depuis Coolify. Aucune nouvelle variable d’environnement n’est nécessaire. Laissez le volume `/app/data` connecté. La base existante est migrée automatiquement.
 4. Ne relancez pas l’installation des espaces : vos rôles, salons, thèmes et templates existants sont conservés.
 5. Testez avec un ticket neuf. Sur un ancien ticket ouvert, cliquez sur **Prendre en charge** avec son responsable actuel : le bot publie les nouveaux boutons. L’ancien bouton Fermer explique désormais le nouveau parcours.
@@ -34,10 +34,12 @@ Les anciennes archives et leurs salons ne sont pas supprimés automatiquement : 
 
 - **Mes tickets** : demandes et archives appartenant à la personne connectée. Accessible aux visiteurs, même sans rôle Équipe/Support. Les archives personnelles restent accessibles si le bot est hors ligne ou si la personne a quitté le serveur.
 - **Tickets** : file globale réservée au Support et aux admins.
-- **Configuration → Tickets** : panneau, destinations, thèmes et formulaire.
-- **Configuration → Templates projets** : salons des futurs projets.
-- **Configuration → Accès** : rôles Équipe, Support et Admin.
-- **Configuration → Installation** : création des espaces manquants.
+- **Configuration → Démarrage** : rôles Équipe/Support, salon de création et état de préparation. Les valeurs existantes sont conservées ; des correspondances uniques avec les espaces Holysheet peuvent être proposées pour les choix manquants, sans attribution automatique de rôle Admin.
+- **Configuration → Tickets** : message d’accueil, thèmes et questions, avec aperçu pour le visiteur. Les destinations particulières et options de champs sont repliées.
+- **Configuration → Projets** : noms, types et ordre des salons des futurs projets.
+- **Configuration → Avancé** : rôle Admin, catégorie des tickets et maintenance.
+- **Enregistrer et actualiser le panneau** sauvegarde et publie en une action. Un échec de publication conserve les réglages et affiche une possibilité de réessayer.
+- Les modifications sont conservées en changeant de section et une confirmation protège la sortie sans enregistrement.
 - **Activité** : libellés explicites, auteur et ticket/projet concerné ; incidents de suppression et de message privé visibles.
 
 ## Vérification après déploiement

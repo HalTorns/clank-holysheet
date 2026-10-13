@@ -11,6 +11,11 @@ export const responseTypes = {
   question: "Question",
   solution: "Solution",
 };
+export function ticketChannelName(id, subject) {
+  const prefix = `ticket-${String(id).padStart(4, '0')}-`;
+  const slug = subject.normalize('NFKD').replace(/\p{M}/gu, '').toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-+|-+$/g, '') || 'demande';
+  return (prefix + slug).slice(0, 100).replace(/-+$/g, '');
+}
 export function canReadTicket(actor, ticket) {
   return Boolean(ticket && (actor.support || ticket.user_id === actor.id));
 }

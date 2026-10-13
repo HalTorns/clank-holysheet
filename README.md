@@ -1,6 +1,6 @@
 # Clank · Holysheet
 
-**Version 0.2 — voir [le guide de mise à jour](UPGRADE.md).**
+**Version 0.3 — voir [le guide de mise à jour](UPGRADE.md).**
 
 Bot Discord et dashboard français pour l’équipe de développement Holysheet. Une application Node.js 24, un conteneur Docker et une base SQLite persistante. Aucun abonnement à un bot tiers.
 
@@ -9,14 +9,15 @@ Bot Discord et dashboard français pour l’équipe de développement Holysheet.
 - Tous les membres avec le rôle Équipe créent un projet depuis Discord (`/projet creer nom:...`) ou le dashboard. Toute l’équipe le voit et peut y participer.
 - Une catégorie `PROJET - Nom` est créée avec cadrage, discussion, boite-a-idees, liens-utiles, decisions et Atelier (vocal). Le créateur gère les salons, les messages et les permissions dans sa catégorie. Renommage, archivage et suppression avec confirmation sont disponibles dans les deux interfaces. Les identifiants des projets figurent dans le dashboard.
 - Les visiteurs choisissent un thème (Bug, Demande, Projet, Question, Autre) dans le panneau Discord, puis remplissent le titre et la description. Les admins ajoutent jusqu’à trois champs texte supplémentaires, courts ou longs, obligatoires ou facultatifs.
+- Les nouveaux salons sont nommés `ticket-0008-sujet-du-ticket`, avec un numéro sur au moins quatre chiffres. Le message d’accueil affiche `Ticket #0008 Sujet du ticket`.
 - Un ticket ouvert maximum par personne. Seuls son demandeur, le Support et les admins Discord le voient. L’équipe seule ne voit pas les tickets.
 - Le Support prend en charge un ticket puis clique sur Répondre : le formulaire Discord propose Tâche, Question ou Solution. Le responsable peut aussi répondre avec le même choix dans le dashboard. Les messages restent synchronisés.
 - Une solution est validée uniquement par le demandeur, dans Discord ou Mes tickets. Une ancienne solution remplacée ne peut pas être validée. Les admins disposent d’une clôture administrative avec confirmation sur le dashboard.
 - À la validation : l’historique et les pièces jointes sont sauvegardés localement, l’archive est enregistrée dans SQLite puis le salon Discord est supprimé. Aucun salon d’archives ni fichier d’archive Discord n’est utilisé. Le demandeur reçoit un lien privé vers Mes tickets, protégé par connexion Discord.
 - Les archives personnelles sont consultables par leur demandeur même sans rôle ou si le bot est hors ligne. Le Support et les admins voient la file globale. Un utilisateur ne peut pas accéder aux tickets des autres demandeurs.
 - Un échec de lecture ou de sauvegarde conserve le ticket ouvert. Un échec de suppression laisse l’archive disponible et peut être réessayé depuis le dashboard. Un message privé refusé n’empêche pas l’archivage.
-- Le dashboard permet de choisir les rôles, le panneau et son message, les thèmes et leurs catégories de destination, les champs et le template des futurs projets. Après modification des thèmes/messages, cliquer sur **Publier / actualiser le panneau**.
-- Le bouton **Installer les espaces Holysheet** crée les rôles et espaces manquants, sans modifier les anciens salons. Il peut être relancé sans créer de doublons tant que les ressources et la base existent. Les roles Équipe/Support/Admin sont à attribuer manuellement dans Discord.
+- Le dashboard permet de choisir les rôles, le panneau et son message, les thèmes et leurs catégories de destination, les champs et le template des futurs projets. Depuis Démarrage ou Tickets, **Enregistrer et actualiser le panneau** sauvegarde les réglages et publie le panneau en une seule action. Un échec Discord est signalé sans perdre les réglages sauvegardés.
+- Le bouton **Créer les espaces Holysheet** dans Démarrage crée les rôles et espaces manquants, sans modifier les anciens salons. Il peut être relancé sans créer de doublons tant que les ressources et la base existent. Les roles Équipe/Support/Admin sont à attribuer manuellement dans Discord.
 
 ## 1. Application Discord
 
@@ -51,14 +52,14 @@ La page OAuth2 URL Generator permet de générer le lien d’invitation. Le bot 
 
 4. Ajouter un stockage persistant sur `/app/data`. Avec Docker Compose, le volume `clank-data` est déjà déclaré. Le conteneur tourne avec l’utilisateur `node` (UID 1000) : assurer les droits d’écriture si un bind mount est utilisé.
 5. Déployer une seule réplique. Ne pas partager SQLite entre plusieurs conteneurs actifs.
-6. Se connecter avec Discord au dashboard, cliquer sur **Configuration → Installer les espaces Holysheet**, puis attribuer les rôles aux personnes concernées dans Discord.
+6. Se connecter avec Discord au dashboard, ouvrir **Configuration → Démarrage → Je n’ai pas encore créé les espaces Holysheet**, puis cliquer sur **Créer les espaces Holysheet**, puis attribuer les rôles aux personnes concernées dans Discord.
 7. Tester avec un compte visiteur sans rôle et un compte Équipe : un visiteur ne doit voir que le panneau Holysheet et son ticket ; l’équipe voit ses espaces et projets ; le Support voit les tickets. Les anciens salons publics restent publics tant que vous ne modifiez pas leurs permissions manuellement.
 
 `ADMIN_USER_IDS` permet l’accès initial au dashboard à un membre du serveur. Le rôle Admin Clank permet la gestion de Clank mais n’accorde pas le pouvoir Administrateur Discord. Un vrai admin Discord voit toujours tous les salons ; Discord ne permet pas de le masquer à un Administrator.
 
 ## Configuration et sauvegardes
 
-- La configuration est segmentée en Tickets, Templates projets, Accès et Installation. Le journal affiche les actions en clair avec le ticket/projet concerné.
+- **Démarrage** affiche les trois choix principaux et l’état de préparation. **Tickets** propose un aperçu du panneau et du formulaire. **Projets** permet d’ordonner les salons. **Avancé** contient l’administration, le rangement et la maintenance. Les options particulières sont repliées, les choix existants sont conservés et les modifications non enregistrées sont signalées avant de quitter. Le journal affiche les actions en clair avec le ticket/projet concerné.
 - La configuration, les sessions, les projets, les messages et le journal résident dans `/app/data/clank.sqlite`. Sauvegarder **tout le volume**, conteneur arrêté, ou utiliser un backup SQLite cohérent (incluant WAL si actif). Ne jamais envoyer une sauvegarde au dépôt public.
 - À la reconnexion, Clank rattrape l’historique des tickets ouverts. Les messages définitivement supprimés pendant une coupure ne peuvent pas être récupérés. Une fermeture échoue si l’historique ou le salon d’archives ne peut pas être lu/écrit.
 - Les pièces jointes des nouvelles archives sont conservées dans `/app/data/attachments` et servies par des routes authentifiées. Sauvegarder tout le volume. Les anciennes URLs déjà expirées ne peuvent pas être restaurées.
