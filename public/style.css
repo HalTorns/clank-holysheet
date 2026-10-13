@@ -401,3 +401,19 @@ pre {
     margin-top: 10px;
   }
 }
+
+.settings-tabs {
+  position: sticky;
+  top: 0;
+  z-index: 2;
+  padding: 12px 0;
+  background: var(--bg);
+}
+.settings-tabs button.active {
+  background: var(--accent);
+  color: #182211;
+}
+button[hidden],
+.card[hidden] {
+  display: none !important;
+}

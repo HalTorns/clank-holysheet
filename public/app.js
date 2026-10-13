@@ -103,6 +103,7 @@ async function render() {
   const titles = {
     overview: "Vue d’ensemble",
     tickets: "Support & tickets",
+    mine: "Mes tickets",
     projects: "Les projets",
     settings: "Configuration",
     audit: "Journal d’activité",
@@ -113,7 +114,7 @@ async function render() {
     .forEach((b) => b.classList.toggle("active", b.dataset.view === view));
   try {
     if (view === "overview") await overview();
-    if (view === "tickets") await tickets();
+    if (view === "tickets" || view === "mine") await tickets();
     if (view === "projects") await projects();
     if (view === "settings") await settings();
     if (view === "audit") await audit();
@@ -153,17 +154,35 @@ async function overview() {
     );
   $("#content").append(c);
 }
+function ticketState(t) {
+  return t.status === "closed"
+    ? "Archivé"
+    : t.pending_solution_id
+      ? "Solution à valider"
+      : t.assignee
+        ? "En cours"
+        : "À prendre en charge";
+}
 async function tickets() {
   if (selectedTicket) return ticketDetail();
-  const ts = await api("/tickets"),
-    c = card("La file de support");
+  const ts = await api(view === "mine" ? "/tickets?scope=mine" : "/tickets"),
+    c = card(view === "mine" ? "Mes demandes" : "La file de support");
+  c.append(
+    el(
+      "p",
+      view === "mine"
+        ? "Retrouvez vos demandes et leurs archives. Seuls vous et le Support pouvez consulter ces conversations."
+        : "Prenez un ticket en charge, puis répondez par une tâche, une question ou une solution. Le demandeur valide la solution avant archivage.",
+      "muted",
+    ),
+  );
   c.append(
     table(
       ["Ticket", "Thème", "État", "Responsable", "Créé le", ""],
       ts.map((t) => [
         `#${t.id} · ${t.title}`,
         t.theme,
-        t.status === "open" ? "Ouvert" : "Archivé",
+        ticketState(t),
         t.assignee || "Non attribué",
         date(t.created_at),
         button(
@@ -177,18 +196,15 @@ async function tickets() {
       ]),
     ),
   );
-  if (!ts.length)
-    c.append(
-      el(
-        "p",
-        "Aucun ticket pour le moment. Publiez le panneau dans Discord pour recevoir les premières demandes.",
-        "empty",
-      ),
-    );
+  if (!ts.length) c.append(el("p", "Aucun ticket pour le moment.", "empty"));
   $("#content").append(c);
 }
 async function ticketDetail() {
-  const { ticket: t, messages } = await api(`/tickets/${selectedTicket}`);
+  const {
+    ticket: t,
+    messages,
+    responses = [],
+  } = await api(`/tickets/${selectedTicket}`);
   const tools = el("div", undefined, "toolbar");
   tools.append(
     button(
@@ -200,42 +216,74 @@ async function ticketDetail() {
       "secondary",
     ),
   );
-  if (t.status === "open") {
+  if (t.status === "open" && me.support && !t.assignee)
     tools.append(
       button("Prendre en charge", async () => {
         await api(`/tickets/${t.id}/claim`, "POST", {});
         await render();
       }),
     );
+  if (t.status === "open" && me.admin)
     tools.append(
       button(
-        "Fermer et archiver",
+        "Clôture administrative",
         async () => {
-          if (!confirm("Fermer ce ticket et conserver son archive ?")) return;
-          await api(`/tickets/${t.id}/close`, "POST", {});
+          if (
+            !confirm(
+              "Archiver sans validation du demandeur et supprimer le salon Discord ?",
+            )
+          )
+            return;
+          await api(`/tickets/${t.id}/close`, "POST", { confirm: true });
           await render();
         },
         "secondary",
       ),
     );
-  } else {
-    const a = el("a", "Télécharger l’archive JSON");
-    a.href = `/api/tickets/${t.id}/archive`;
-    tools.append(a);
+  if (t.status === "closed") {
+    const link = el("a", "Télécharger mon archive");
+    link.href = `/api/tickets/${t.id}/archive`;
+    tools.append(link);
+    if (me.support && !t.channel_deleted)
+      tools.append(
+        button(
+          "Réessayer la suppression du salon",
+          async () => {
+            await api(`/tickets/${t.id}/cleanup`, "POST", {});
+            await render();
+          },
+          "secondary",
+        ),
+      );
   }
   $("#content").append(tools);
   const c = card(`#${t.id} · ${t.title}`);
   c.append(
     el(
       "p",
-      `${t.theme} · ${t.status === "open" ? "Ouvert" : "Archivé"} · Demandeur ${t.user_id}`,
+      `${t.theme} · ${ticketState(t)} · Responsable : ${t.assignee || "non attribué"}`,
       "muted",
     ),
   );
-  const answers = JSON.parse(t.answers),
-    details = el("details");
+  if (t.status === "closed")
+    c.append(
+      el(
+        "p",
+        "Cette conversation est conservée dans Clank. Aucun salon Discord n’est nécessaire pour la consulter.",
+        "muted",
+      ),
+    );
+  if (me.support && t.status === "closed" && !t.dm_sent)
+    c.append(
+      el(
+        "p",
+        "Le message privé n’a pas pu être remis au demandeur. Il peut retrouver ce ticket en se connectant au dashboard → Mes tickets.",
+        "muted",
+      ),
+    );
+  const details = el("details");
   details.append(el("summary", "Formulaire de la demande"));
-  Object.entries(answers).forEach(([k, v]) =>
+  Object.entries(JSON.parse(t.answers)).forEach(([k, v]) =>
     details.append(el("p", `${k} : ${v}`)),
   );
   c.append(details);
@@ -243,24 +291,36 @@ async function ticketDetail() {
   function showMessages(ms) {
     log.replaceChildren();
     ms.forEach((m) => {
-      const d = el("article", undefined, "message");
+      const d = el("article", undefined, "message"),
+        response = responses.find((r) => r.message_id === m.id);
       d.append(
-        el("strong", m.author),
+        el(
+          "strong",
+          response
+            ? `${{ task: "Tâche", question: "Question", solution: "Solution" }[response.kind]} · Support`
+            : m.author,
+        ),
         el(
           "small",
-          ` · ${date(m.created_at)}${m.deleted ? " · supprimé dans Discord" : ""}`,
+          ` · ${date(m.created_at)}${m.deleted ? " · supprimé avant archivage" : ""}`,
         ),
-        el("p", m.content),
+        el("p", response ? response.content : m.content),
       );
       JSON.parse(m.attachments).forEach((a) => {
-        const link = el("a", a.name || "Pièce jointe");
-        const url = new URL(a.url);
-        if (url.protocol === "https:") {
-          link.href = url.href;
-          link.target = "_blank";
-          link.rel = "noopener noreferrer";
-          d.append(link);
-        }
+        try {
+          const url = new URL(a.url, location.origin);
+          if (
+            url.protocol === "https:" ||
+            (url.origin === location.origin &&
+              url.pathname.startsWith("/api/tickets/"))
+          ) {
+            const link = el("a", a.name || "Pièce jointe");
+            link.href = url.href;
+            link.target = "_blank";
+            link.rel = "noopener noreferrer";
+            d.append(link);
+          }
+        } catch {}
       });
       log.append(d);
     });
@@ -268,26 +328,74 @@ async function ticketDetail() {
   showMessages(messages);
   c.append(log);
   $("#content").append(c);
-  if (t.status === "open") {
-    const reply = card("Répondre depuis le dashboard"),
+  if (t.status === "open" && t.pending_solution_id && t.user_id === me.id) {
+    const solution = responses.find((r) => r.id === t.pending_solution_id),
+      panel = card("La solution résout-elle votre demande ?");
+    if (solution) panel.append(el("p", solution.content));
+    panel.append(
+      el(
+        "p",
+        "En validant, vous archivez la conversation et le salon Discord est supprimé. Vous pourrez toujours lire votre archive dans Mes tickets.",
+        "muted",
+      ),
+      button("Valider la solution et archiver", async () => {
+        if (!confirm("Valider cette solution et archiver le ticket ?")) return;
+        await api(`/tickets/${t.id}/accept`, "POST", {
+          solutionId: t.pending_solution_id,
+        });
+        await render();
+      }),
+    );
+    $("#content").append(panel);
+  }
+  if (t.status === "open" && me.support && t.assignee === me.id) {
+    const reply = card("Répondre au demandeur"),
       text = input("", null, "textarea");
-    text.maxLength = 1800;
+    text.maxLength = 4000;
+    let kind = "question";
     reply.append(
+      label(
+        "Type de réponse",
+        select(
+          [
+            { id: "task", name: "Tâche" },
+            { id: "question", name: "Question" },
+            { id: "solution", name: "Solution" },
+          ],
+          kind,
+          (v) => (kind = v),
+        ),
+      ),
       label("Votre réponse", text),
+      el(
+        "p",
+        "Une solution affiche un bouton de validation réservé au demandeur. Une tâche ou une question laisse le ticket ouvert.",
+        "muted",
+      ),
       button("Envoyer sur Discord ↗", async () => {
-        await api(`/tickets/${t.id}/reply`, "POST", { content: text.value });
+        await api(`/tickets/${t.id}/reply`, "POST", {
+          content: text.value,
+          kind,
+        });
         await render();
       }),
     );
     $("#content").append(reply);
+  }
+  if (t.status === "open")
     poll = setInterval(async () => {
       try {
         const fresh = await api(`/tickets/${t.id}`);
-        if (fresh.ticket.status === "closed") return render();
+        if (
+          fresh.ticket.status !== t.status ||
+          fresh.ticket.pending_solution_id !== t.pending_solution_id ||
+          fresh.ticket.assignee !== t.assignee ||
+          fresh.responses?.length !== responses.length
+        )
+          return render();
         showMessages(fresh.messages);
       } catch {}
     }, 5000);
-  }
 }
 async function projects() {
   const ps = await api("/projects"),
@@ -369,6 +477,7 @@ async function projects() {
   if (!ps.length) c.append(el("p", "Le premier projet commence ici.", "empty"));
   $("#content").append(c);
 }
+let settingsSection = "tickets";
 async function settings() {
   [config, resources] = await Promise.all([api("/config"), api("/resources")]);
   const actions = el("div", undefined, "toolbar");
@@ -404,7 +513,7 @@ async function settings() {
     ),
   );
   $("#content").append(actions);
-  const roles = card("Rôles et destinations"),
+  const roles = card("Accès au dashboard"),
     row = el("div", undefined, "row");
   for (const [key, title] of [
     ["teamRoleId", "Équipe"],
@@ -421,12 +530,13 @@ async function settings() {
         ),
       ),
     );
+  const destinations = card("Destinations des tickets"),
+    destinationsRow = el("div", undefined, "row");
   for (const [key, title, type] of [
     ["panelChannelId", "Salon du panneau", 0],
     ["ticketCategoryId", "Catégorie des tickets", 4],
-    ["archiveChannelId", "Salon des archives", 0],
   ])
-    row.append(
+    destinationsRow.append(
       label(
         title,
         select(
@@ -439,6 +549,15 @@ async function settings() {
         ),
       ),
     );
+  destinations.append(
+    destinationsRow,
+    el(
+      "p",
+      "Les archives restent dans la base de Clank. Aucun salon d’archives Discord n’est utilisé.",
+      "muted",
+    ),
+  );
+  $("#content").append(destinations);
   roles.append(
     row,
     el(
@@ -648,14 +767,67 @@ async function settings() {
     ),
   );
   $("#content").append(template);
+  const groups = {
+    access: [roles],
+    tickets: [destinations, panel, themes, fields],
+    projects: [template],
+    installation: [],
+  };
+  const help = card("Installation des espaces");
+  help.append(
+    el(
+      "p",
+      "Crée les espaces Holysheet manquants à côté de l’existant. Les rôles restent à attribuer dans Discord. Les anciens salons d’archives ne sont pas supprimés automatiquement.",
+      "muted",
+    ),
+  );
+  $("#content").append(help);
+  groups.installation.push(help);
+  const sections = el("div", undefined, "toolbar settings-tabs");
+  const applySection = () => {
+    Object.entries(groups).forEach(([key, cards]) =>
+      cards.forEach((c) => (c.hidden = key !== settingsSection)),
+    );
+    sections
+      .querySelectorAll("button")
+      .forEach((b) =>
+        b.classList.toggle("active", b.dataset.section === settingsSection),
+      );
+    actions.children[1].hidden = settingsSection !== "tickets";
+    actions.children[2].hidden = settingsSection !== "installation";
+  };
+  for (const [key, title] of [
+    ["tickets", "Tickets"],
+    ["projects", "Templates projets"],
+    ["access", "Accès"],
+    ["installation", "Installation"],
+  ]) {
+    const b = button(
+      title,
+      () => {
+        settingsSection = key;
+        applySection();
+      },
+      "secondary",
+    );
+    b.dataset.section = key;
+    sections.append(b);
+  }
+  $("#content").prepend(sections);
+  applySection();
 }
 async function audit() {
   const rows = await api("/audit"),
     c = card("Dernières opérations");
   c.append(
     table(
-      ["Date", "Auteur Discord", "Action"],
-      rows.map((r) => [date(r.created_at), r.actor, r.action]),
+      ["Date", "Auteur", "Action", "Détail"],
+      rows.map((r) => [
+        date(r.created_at),
+        r.actorName || r.actor,
+        r.title || r.action,
+        r.detail || "",
+      ]),
     ),
   );
   $("#content").append(c);
@@ -669,7 +841,8 @@ async function init() {
     $("#workspace").hidden = false;
     $("#username").textContent = me.name;
     const tabs = [
-      ["overview", "Vue d’ensemble"],
+      ...(me.team || me.support ? [["overview", "Vue d’ensemble"]] : []),
+      ["mine", "Mes tickets"],
       ...(me.support ? [["tickets", "Tickets"]] : []),
       ...(me.team ? [["projects", "Projets"]] : []),
       ...(me.admin
@@ -696,9 +869,25 @@ async function init() {
         notify(e.message);
       }
     };
+    const params = new URLSearchParams(location.search);
+    if (params.get("view") === "mine" || (!me.team && !me.support))
+      view = "mine";
+    if (params.get("ticket") && /^\d+$/.test(params.get("ticket"))) {
+      view = "mine";
+      selectedTicket = Number(params.get("ticket"));
+    }
+    if (data.discordWarning) notify(data.discordWarning);
+    const badge = document.querySelector("header .badge");
+    if (badge)
+      badge.textContent = data.ready
+        ? "● Discord connecté"
+        : "● Archives disponibles";
     await render();
   } catch (e) {
     if (e.message !== "Connexion Discord requise.") notify(e.message);
   }
 }
+const loginLink = document.querySelector("#login .primary");
+if (loginLink)
+  loginLink.href = `/auth/login?next=${encodeURIComponent("/" + location.search)}`;
 init();

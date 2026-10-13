@@ -1,6 +1,6 @@
 {
   "name": "clank-holysheet",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "private": true,
   "type": "module",
   "packageManager": "pnpm@11.25.0",
@@ -10,7 +10,7 @@
   "scripts": {
     "start": "node --env-file-if-exists=.env src/server.js",
     "test": "node --test",
-    "check": "node --check src/server.js && node --check src/bot.js && node --check src/store.js && node --check public/app.js"
+    "check": "node --check src/server.js && node --check src/bot.js && node --check src/store.js && node --check src/tickets.js && node --check src/attachments.js && node --check src/audit.js && node --check src/discord-errors.js && node --check public/app.js"
   },
   "dependencies": {
     "discord.js": "^14.22.1",

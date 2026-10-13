@@ -1,5 +1,10 @@
 import { configuredGuild, logDiscordError } from "./discord-errors.js";
 import {
+  createTicketService,
+  ticketControls,
+  responseTypes,
+} from "./tickets.js";
+import {
   Client,
   GatewayIntentBits,
   Partials,
@@ -15,6 +20,7 @@ import {
   ButtonBuilder,
   ButtonStyle,
   MessageFlags,
+  LabelBuilder,
 } from "discord.js";
 
 export const canSupport = (member, c) =>
@@ -83,75 +89,20 @@ export function createBot(store, env) {
     }
     return channel;
   }
-  async function closeTicket(id, actor) {
-    return locked(`ticket:${id}`, async () => {
-      const t = store.ticket(id);
-      if (!t || t.status === "closed")
-        throw Error("Ticket déjà fermé ou introuvable.");
-      const c = store.config();
-      const channel = await snapshot(t);
-      const archive = c.archiveChannelId
-        ? await (await guild()).channels.fetch(c.archiveChannelId)
-        : null;
-      if (!archive?.isTextBased())
-        throw Error(
-          "Configurez un salon d’archives valide avant de fermer les tickets.",
-        );
-      const g = await guild();
-      if (archive.permissionsFor(g.roles.everyone)?.has(P.ViewChannel))
-        throw Error(
-          "Le salon des archives est visible par les visiteurs. Corrigez ses permissions.",
-        );
-      const attachment = Buffer.from(
-        JSON.stringify({ ticket: t, messages: store.messages(id) }, null, 2),
-      );
-      await archive.send({
-        content: `Archive du ticket #${t.id} — ${t.title}`,
-        files: [{ attachment, name: `ticket-${id}.json` }],
-        allowedMentions: { parse: [] },
-      });
-      await channel.permissionOverwrites.edit(t.user_id, {
-        SendMessages: false,
-        ViewChannel: false,
-      });
-      await channel.setName(`ferme-${t.id}`);
-      store.db
-        .prepare("UPDATE tickets SET status='closed',closed_at=? WHERE id=?")
-        .run(new Date().toISOString(), id);
-      store.audit(actor, `ticket.close:${id}`);
-    });
-  }
-  async function claimTicket(id, actor) {
-    return locked(`ticket:${id}`, async () => {
-      const t = store.ticket(id);
-      if (!t || t.status !== "open")
-        throw Error("Ticket fermé ou introuvable.");
-      store.db
-        .prepare("UPDATE tickets SET assignee=? WHERE id=?")
-        .run(actor, id);
-      store.audit(actor, `ticket.claim:${id}`);
-    });
-  }
-  async function replyTicket(id, content, actor) {
-    return locked(`ticket:${id}`, async () => {
-      const t = store.ticket(id);
-      if (!t || t.status !== "open")
-        throw Error("Ticket fermé ou introuvable.");
-      if (
-        typeof content !== "string" ||
-        !content.trim() ||
-        content.length > 1800
-      )
-        throw Error("Réponse vide ou trop longue (1800 caractères maximum).");
-      const channel = await (await guild()).channels.fetch(t.channel_id);
-      const m = await channel.send({
-        content: `**Support · <@${actor}>**\n${content}`,
-        allowedMentions: { parse: [] },
-      });
-      store.saveMessage(id, m);
-      store.audit(actor, `ticket.reply:${id}`);
-    });
-  }
+  const {
+    closeTicket,
+    claimTicket,
+    replyTicket,
+    sendPortal,
+    deleteArchivedChannel,
+  } = createTicketService({
+    store,
+    guild,
+    client,
+    snapshot,
+    locked,
+    publicUrl: env.PUBLIC_URL || "http://localhost:3000",
+  });
   async function publishPanel() {
     const c = store.config();
     const channel = await (await guild()).channels.fetch(c.panelChannelId);
@@ -285,12 +236,6 @@ export function createBot(store, env) {
         botOverwrite(),
         ...staffOverwrites(c),
       ]);
-      store.saveConfig(c);
-      c.archiveChannelId ||= await text(
-        "archive",
-        "archives-tickets",
-        c.ticketCategoryId,
-      );
       store.saveConfig(c);
       await publishPanel();
       store.audit(actor, "server.setup");
@@ -516,6 +461,7 @@ export function createBot(store, env) {
               new Date().toISOString(),
             );
           const id = Number(result.lastInsertRowid);
+          store.audit(i.user.id, `ticket.create:${id}`);
           try {
             const m = await channel.send({
               embeds: [
@@ -530,18 +476,7 @@ export function createBot(store, env) {
                   )
                   .setFooter({ text: `Thème : ${theme.name}` }),
               ],
-              components: [
-                new ActionRowBuilder().addComponents(
-                  new ButtonBuilder()
-                    .setCustomId(`ticket:claim:${id}`)
-                    .setLabel("Prendre en charge")
-                    .setStyle(ButtonStyle.Primary),
-                  new ButtonBuilder()
-                    .setCustomId(`ticket:close:${id}`)
-                    .setLabel("Fermer et archiver")
-                    .setStyle(ButtonStyle.Secondary),
-                ),
-              ],
+              components: [ticketControls(id)],
             });
             store.saveMessage(id, m);
             await i.editReply(`Ticket créé : <#${channel.id}>`);
@@ -552,24 +487,86 @@ export function createBot(store, env) {
             );
             console.error("Publication du message d’accueil impossible.");
           }
+          await sendPortal(store.ticket(id), false);
         });
+        return;
+      }
+      if (i.isButton() && i.customId.startsWith("ticket:accept:")) {
+        const [, , id, responseId] = i.customId.split(":");
+        await i.deferReply({ flags: MessageFlags.Ephemeral });
+        await closeTicket(Number(id), i.user.id, Number(responseId));
+        await i.editReply(
+          "Solution validée. Le ticket est archivé dans Mes tickets sur le dashboard.",
+        );
         return;
       }
       const member = await (
         await guild()
       ).members.fetch({ user: i.user.id, force: true });
+      if (i.isModalSubmit() && i.customId.startsWith("ticket:response:")) {
+        if (!canSupport(member, c)) throw Error("Action réservée au Support.");
+        const id = Number(i.customId.split(":")[2]);
+        await i.deferReply({ flags: MessageFlags.Ephemeral });
+        await replyTicket(
+          id,
+          i.fields.getTextInputValue("response_content"),
+          i.user.id,
+          i.fields.getStringSelectValues("response_kind")[0],
+        );
+        await i.editReply(
+          "Réponse publiée. Une solution doit être validée par le demandeur pour archiver le ticket.",
+        );
+        return;
+      }
       if (i.isButton() && i.customId.startsWith("ticket:")) {
         if (!canSupport(member, c)) throw Error("Action réservée au Support.");
-        await i.deferReply({ flags: MessageFlags.Ephemeral });
         const [, action, id] = i.customId.split(":");
-        if (action === "close") await closeTicket(Number(id), i.user.id);
-        else if (action === "claim") await claimTicket(Number(id), i.user.id);
+        if (action === "reply") {
+          const t = store.ticket(Number(id));
+          if (!t || t.status !== "open" || t.assignee !== i.user.id)
+            throw Error("Prenez ce ticket en charge avant de répondre.");
+          const modal = new ModalBuilder()
+            .setCustomId(`ticket:response:${id}`)
+            .setTitle("Répondre au ticket")
+            .addLabelComponents(
+              new LabelBuilder()
+                .setLabel("Type de réponse")
+                .setStringSelectMenuComponent(
+                  new StringSelectMenuBuilder()
+                    .setCustomId("response_kind")
+                    .setMinValues(1)
+                    .setMaxValues(1)
+                    .addOptions(
+                      Object.entries(responseTypes).map(([value, label]) => ({
+                        label,
+                        value,
+                      })),
+                    ),
+                ),
+              new LabelBuilder()
+                .setLabel("Votre réponse")
+                .setTextInputComponent(
+                  new TextInputBuilder()
+                    .setCustomId("response_content")
+                    .setStyle(TextInputStyle.Paragraph)
+                    .setRequired(true)
+                    .setMaxLength(4000),
+                ),
+            );
+          await i.showModal(modal);
+          return;
+        }
+        await i.deferReply({ flags: MessageFlags.Ephemeral });
+        if (action === "claim") {
+          await claimTicket(Number(id), i.user.id);
+          await i.editReply(
+            "Ticket pris en charge. Utilisez Répondre pour compléter le formulaire.",
+          );
+        } else if (action === "close")
+          throw Error(
+            "Proposez une solution via Répondre. Le demandeur doit la valider pour archiver le ticket.",
+          );
         else throw Error("Action inconnue.");
-        await i.editReply(
-          action === "close"
-            ? "Ticket fermé et archivé."
-            : "Ticket pris en charge.",
-        );
         return;
       }
       if (i.isChatInputCommand() && i.commandName === "projet") {
@@ -704,6 +701,10 @@ export function createBot(store, env) {
         await snapshot(t).catch(() =>
           console.error(`Rattrapage impossible pour le ticket ${t.id}.`),
         );
+      for (const t of store
+        .tickets()
+        .filter((t) => t.status === "closed" && !t.channel_deleted))
+        await deleteArchivedChannel(t.id);
     } catch (error) {
       logDiscordError(stage, error);
     }
@@ -719,5 +720,7 @@ export function createBot(store, env) {
     projectCreate,
     projectAction,
     snapshot,
+    sendPortal,
+    deleteArchivedChannel,
   };
 }

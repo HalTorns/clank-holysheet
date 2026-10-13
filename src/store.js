@@ -1,6 +1,6 @@
 import { DatabaseSync } from "node:sqlite";
 import { mkdirSync } from "node:fs";
-import { join } from "node:path";
+import { join, resolve } from "node:path";
 
 export const defaults = {
   teamRoleId: "",
@@ -146,13 +146,44 @@ export function createStore(directory) {
   db.prepare("INSERT OR IGNORE INTO config VALUES(1, ?)").run(
     JSON.stringify(defaults),
   );
+  const columns = new Set(
+    db
+      .prepare("PRAGMA table_info(tickets)")
+      .all()
+      .map((c) => c.name),
+  );
+  for (const [name, type] of [
+    ["pending_solution_id", "INTEGER"],
+    ["channel_deleted", "INTEGER NOT NULL DEFAULT 0"],
+    ["dm_sent", "INTEGER NOT NULL DEFAULT 0"],
+  ]) {
+    if (!columns.has(name))
+      db.exec(`ALTER TABLE tickets ADD COLUMN ${name} ${type}`);
+  }
+  if (!columns.has("channel_deleted"))
+    db.exec("UPDATE tickets SET channel_deleted=1 WHERE status='closed'");
+  db.exec(
+    "CREATE TABLE IF NOT EXISTS responses(id INTEGER PRIMARY KEY AUTOINCREMENT,ticket_id INTEGER NOT NULL,kind TEXT NOT NULL,actor TEXT NOT NULL,content TEXT NOT NULL,message_id TEXT,created_at TEXT NOT NULL,accepted_at TEXT)",
+  );
+  db.exec(
+    "CREATE TABLE IF NOT EXISTS attachments(id TEXT PRIMARY KEY,ticket_id INTEGER NOT NULL,name TEXT NOT NULL,filename TEXT NOT NULL)",
+  );
   return {
     db,
+    directory: resolve(directory),
     config: () =>
       JSON.parse(db.prepare("SELECT value FROM config WHERE id=1").get().value),
     saveConfig: (c) =>
       db.prepare("UPDATE config SET value=? WHERE id=1").run(JSON.stringify(c)),
     tickets: () => db.prepare("SELECT * FROM tickets ORDER BY id DESC").all(),
+    ownTickets: (userId) =>
+      db
+        .prepare("SELECT * FROM tickets WHERE user_id=? ORDER BY id DESC")
+        .all(userId),
+    responses: (id) =>
+      db
+        .prepare("SELECT * FROM responses WHERE ticket_id=? ORDER BY id")
+        .all(id),
     ticket: (id) => db.prepare("SELECT * FROM tickets WHERE id=?").get(id),
     channelTicket: (id) =>
       db.prepare("SELECT * FROM tickets WHERE channel_id=?").get(id),
@@ -170,9 +201,21 @@ export function createStore(directory) {
         ticketId,
         m.author?.username || "Inconnu",
         m.author?.id || "",
-        m.content || "",
+        m.content ||
+          (m.embeds || [])
+            .map((e) =>
+              [
+                e.title,
+                e.description,
+                ...(e.fields || []).map((f) => `${f.name} : ${f.value}`),
+              ]
+                .filter(Boolean)
+                .join("\n"),
+            )
+            .join("\n\n"),
         JSON.stringify(
           [...m.attachments.values()].map((a) => ({
+            id: a.id,
             name: a.name,
             url: a.url,
           })),

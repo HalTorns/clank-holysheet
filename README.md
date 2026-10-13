@@ -1,5 +1,7 @@
 # Clank · Holysheet
 
+**Version 0.2 — voir [le guide de mise à jour](UPGRADE.md).**
+
 Bot Discord et dashboard français pour l’équipe de développement Holysheet. Une application Node.js 24, un conteneur Docker et une base SQLite persistante. Aucun abonnement à un bot tiers.
 
 ## Fonctionnement
@@ -8,8 +10,11 @@ Bot Discord et dashboard français pour l’équipe de développement Holysheet.
 - Une catégorie `PROJET - Nom` est créée avec cadrage, discussion, boite-a-idees, liens-utiles, decisions et Atelier (vocal). Le créateur gère les salons, les messages et les permissions dans sa catégorie. Renommage, archivage et suppression avec confirmation sont disponibles dans les deux interfaces. Les identifiants des projets figurent dans le dashboard.
 - Les visiteurs choisissent un thème (Bug, Demande, Projet, Question, Autre) dans le panneau Discord, puis remplissent le titre et la description. Les admins ajoutent jusqu’à trois champs texte supplémentaires, courts ou longs, obligatoires ou facultatifs.
 - Un ticket ouvert maximum par personne. Seuls son demandeur, le Support et les admins Discord le voient. L’équipe seule ne voit pas les tickets.
-- Le Support prend en charge, répond et ferme dans Discord ou dans le dashboard. Les réponses web sont envoyées dans Discord ; les messages Discord apparaissent dans le dashboard, actualisé toutes les cinq secondes.
-- À la fermeture : rattrapage de l’historique, archive JSON dans le salon privé d’archives et conservation SQLite, retrait d’accès au demandeur et renommage du salon. Le salon fermé reste accessible au Support. Les admins doivent organiser sa suppression périodique pour respecter la limite Discord de salons.
+- Le Support prend en charge un ticket puis clique sur Répondre : le formulaire Discord propose Tâche, Question ou Solution. Le responsable peut aussi répondre avec le même choix dans le dashboard. Les messages restent synchronisés.
+- Une solution est validée uniquement par le demandeur, dans Discord ou Mes tickets. Une ancienne solution remplacée ne peut pas être validée. Les admins disposent d’une clôture administrative avec confirmation sur le dashboard.
+- À la validation : l’historique et les pièces jointes sont sauvegardés localement, l’archive est enregistrée dans SQLite puis le salon Discord est supprimé. Aucun salon d’archives ni fichier d’archive Discord n’est utilisé. Le demandeur reçoit un lien privé vers Mes tickets, protégé par connexion Discord.
+- Les archives personnelles sont consultables par leur demandeur même sans rôle ou si le bot est hors ligne. Le Support et les admins voient la file globale. Un utilisateur ne peut pas accéder aux tickets des autres demandeurs.
+- Un échec de lecture ou de sauvegarde conserve le ticket ouvert. Un échec de suppression laisse l’archive disponible et peut être réessayé depuis le dashboard. Un message privé refusé n’empêche pas l’archivage.
 - Le dashboard permet de choisir les rôles, le panneau et son message, les thèmes et leurs catégories de destination, les champs et le template des futurs projets. Après modification des thèmes/messages, cliquer sur **Publier / actualiser le panneau**.
 - Le bouton **Installer les espaces Holysheet** crée les rôles et espaces manquants, sans modifier les anciens salons. Il peut être relancé sans créer de doublons tant que les ressources et la base existent. Les roles Équipe/Support/Admin sont à attribuer manuellement dans Discord.
 
@@ -53,11 +58,12 @@ La page OAuth2 URL Generator permet de générer le lien d’invitation. Le bot 
 
 ## Configuration et sauvegardes
 
+- La configuration est segmentée en Tickets, Templates projets, Accès et Installation. Le journal affiche les actions en clair avec le ticket/projet concerné.
 - La configuration, les sessions, les projets, les messages et le journal résident dans `/app/data/clank.sqlite`. Sauvegarder **tout le volume**, conteneur arrêté, ou utiliser un backup SQLite cohérent (incluant WAL si actif). Ne jamais envoyer une sauvegarde au dépôt public.
 - À la reconnexion, Clank rattrape l’historique des tickets ouverts. Les messages définitivement supprimés pendant une coupure ne peuvent pas être récupérés. Une fermeture échoue si l’historique ou le salon d’archives ne peut pas être lu/écrit.
-- Les archives contiennent les textes et les URLs des pièces jointes, pas les fichiers eux-mêmes. Les URLs Discord peuvent expirer : conserver les fichiers importants dans votre stockage documentaire.
+- Les pièces jointes des nouvelles archives sont conservées dans `/app/data/attachments` et servies par des routes authentifiées. Sauvegarder tout le volume. Les anciennes URLs déjà expirées ne peuvent pas être restaurées.
 - Modifier le rôle Support/Admin après des tickets nécessite une migration des permissions : le dashboard bloque ce changement pour éviter une désynchronisation des accès. Les thèmes et templates restent librement modifiables.
-- Les catégories de ticket doivent être des catégories Discord ; les salons panneau et archives doivent être des salons texte. Vérifier que le salon d’archives est réservé au Support et aux admins.
+- Les destinations des tickets doivent être des catégories Discord, et le panneau un salon texte. Aucun salon d’archives n’est nécessaire. Les anciens salons d’archives ne sont pas supprimés automatiquement.
 - Les permissions projets sont le profil convenu : toute l’équipe participe, propriétaire gestion complète. Les permissions sont éditables dans Discord ; le dashboard configure le template des salons, pas encore des profils de permissions personnalisés.
 - Le formulaire v1 utilise des champs texte ; seules les listes de thèmes sont des menus. Les champs liste, fichiers et priorités structurées sont des extensions futures.
 
@@ -74,7 +80,7 @@ pnpm test
 pnpm check
 ```
 
-Sans variables Discord, la page de connexion et `/health` fonctionnent pour prévisualiser l’interface. Le dashboard opérationnel exige un vrai bot et un compte autorisé ; aucun mode de contournement d’authentification.
+Sans variables Discord, la page de connexion et `/health` fonctionnent pour prévisualiser l’interface. Les opérations Discord exigent un vrai bot et un compte autorisé. Les archives personnelles restent accessibles aux comptes authentifiés même si le bot est hors ligne ; aucun mode de contournement d’authentification.
 
 ## Validation avant production
 

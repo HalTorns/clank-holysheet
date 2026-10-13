@@ -3,8 +3,11 @@ import helmet from "helmet";
 import { rateLimit } from "express-rate-limit";
 import { randomBytes, timingSafeEqual } from "node:crypto";
 import { fileURLToPath } from "node:url";
+import { join } from "node:path";
 import { createStore, validateConfig } from "./store.js";
 import { createBot } from "./bot.js";
+import { canReadTicket } from "./tickets.js";
+import { describeAudit } from "./audit.js";
 import { discordErrorInfo, logDiscordError } from "./discord-errors.js";
 import { PermissionFlagsBits as P, ChannelType } from "discord.js";
 
@@ -60,44 +63,43 @@ async function identity(req, res, next) {
     const session = store.session(cookie(req));
     if (!session?.user)
       return res.status(401).json({ error: "Connexion Discord requise." });
-    if (!bot.client.isReady())
-      return res.status(503).json({
-        error:
-          "Le bot se connecte à Discord. Réessayez dans quelques instants.",
-      });
-    const member = await (
-      await bot.guild()
-    ).members
-      .fetch({ user: session.user.id, force: true })
-      .catch((error) => {
-        if (error.code === 10007) return null;
-        throw error;
-      });
-    if (!member)
-      return res
-        .status(403)
-        .json({ error: "Vous devez être membre du serveur Holysheet." });
+    let member = null,
+      discordWarning = null;
+    if (bot.client.isReady()) {
+      try {
+        member = await (
+          await bot.guild()
+        ).members.fetch({ user: session.user.id, force: true });
+      } catch (error) {
+        if (error.code !== 10007) {
+          logDiscordError("Vérification des rôles", error);
+          discordWarning = discordErrorInfo(error).message;
+        }
+      }
+    } else
+      discordWarning =
+        "Le bot est hors ligne. Vos tickets conservés restent consultables.";
     const c = store.config();
-    const admin =
-      bootstrap().includes(member.id) ||
-      member.permissions.has(P.Administrator) ||
-      Boolean(c.adminRoleId && member.roles.cache.has(c.adminRoleId));
-    const support =
+    const admin = Boolean(
+      member &&
+      (bootstrap().includes(member.id) ||
+        member.permissions.has(P.Administrator) ||
+        (c.adminRoleId && member.roles.cache.has(c.adminRoleId))),
+    );
+    const support = Boolean(
       admin ||
-      Boolean(c.supportRoleId && member.roles.cache.has(c.supportRoleId));
-    const team =
-      admin || Boolean(c.teamRoleId && member.roles.cache.has(c.teamRoleId));
-    if (!team && !support)
-      return res
-        .status(403)
-        .json({ error: "Le dashboard est réservé à l’équipe et au Support." });
+      (member && c.supportRoleId && member.roles.cache.has(c.supportRoleId)),
+    );
+    const team = Boolean(
+      admin || (member && c.teamRoleId && member.roles.cache.has(c.teamRoleId)),
+    );
     req.actor = { ...session.user, admin, support, team };
     req.session = session;
+    req.discordWarning = discordWarning;
     next();
   } catch (error) {
-    logDiscordError("Vérification de l’accès au dashboard", error);
-    const detail = discordErrorInfo(error);
-    res.status(503).json({ error: detail.message, code: detail.code });
+    logDiscordError("Lecture de la session", error);
+    res.status(503).json({ error: discordErrorInfo(error).message });
   }
 }
 function csrf(req, res, next) {
@@ -137,7 +139,13 @@ app.get("/auth/login", (req, res) => {
       .send("Configurez les variables Discord pour activer la connexion.");
   const id = token(),
     state = token();
-  store.putSession(id, { state }, 10 * 60000);
+  let returnTo = "/";
+  if (typeof req.query.next === "string") {
+    const dest = new URL(req.query.next, publicUrl.origin);
+    if (dest.origin === publicUrl.origin && dest.pathname === "/")
+      returnTo = dest.pathname + dest.search;
+  }
+  store.putSession(id, { state, returnTo }, 10 * 60000);
   setCookie(res, id, 10 * 60000);
   const url = new URL("https://discord.com/oauth2/authorize");
   url.search = new URLSearchParams({
@@ -188,7 +196,7 @@ app.get(
       csrf: token(),
     });
     setCookie(res, id);
-    res.redirect("/");
+    res.redirect(pending.returnTo || "/");
   }),
 );
 app.use("/api", identity, csrf);
@@ -197,6 +205,7 @@ app.get("/api/me", (req, res) =>
     user: req.actor,
     csrf: req.session.csrf,
     ready: bot.client.isReady(),
+    discordWarning: req.discordWarning,
   }),
 );
 app.post("/api/logout", (req, res) => {
@@ -231,7 +240,7 @@ app.put(
       if (ch?.type !== ChannelType.GuildCategory)
         throw Error("La destination des tickets doit être une catégorie.");
     }
-    for (const key of ["panelChannelId", "archiveChannelId"])
+    for (const key of ["panelChannelId"])
       if (c[key]) {
         const ch = await g.channels.fetch(c[key]);
         if (ch?.type !== ChannelType.GuildText)
@@ -282,29 +291,101 @@ app.post(
     res.json({ ok: true });
   }),
 );
-app.get("/api/tickets", supportOnly, (_, res) => res.json(store.tickets()));
-app.get("/api/tickets/:id", supportOnly, (req, res) => {
+app.get("/api/tickets", (req, res) =>
+  res.json(
+    req.actor.support && req.query.scope !== "mine"
+      ? store.tickets()
+      : store.ownTickets(req.actor.id),
+  ),
+);
+app.get("/api/tickets/:id", (req, res) => {
   const t = store.ticket(Number(req.params.id));
-  if (!t) return res.status(404).json({ error: "Ticket introuvable." });
-  res.json({ ticket: t, messages: store.messages(t.id) });
+  if (!canReadTicket(req.actor, t))
+    return res.status(404).json({ error: "Ticket introuvable." });
+  const messages = store.messages(t.id).map((m) => ({
+    ...m,
+    attachments: JSON.stringify(
+      JSON.parse(m.attachments).map((a) => {
+        const id = a.id || new URL(a.url).pathname.split("/")[3];
+        const saved = store.db
+          .prepare("SELECT id FROM attachments WHERE id=? AND ticket_id=?")
+          .get(id || "", t.id);
+        return saved
+          ? { ...a, url: `/api/tickets/${t.id}/attachments/${saved.id}` }
+          : a;
+      }),
+    ),
+  }));
+  res.json({ ticket: t, messages, responses: store.responses(t.id) });
 });
-app.get("/api/tickets/:id/archive", supportOnly, (req, res) => {
+app.get("/api/tickets/:id/attachments/:attachmentId", (req, res) => {
   const t = store.ticket(Number(req.params.id));
-  if (!t || t.status !== "closed")
+  if (!canReadTicket(req.actor, t))
+    return res.status(404).json({ error: "Pièce jointe introuvable." });
+  const attachment = store.db
+    .prepare("SELECT * FROM attachments WHERE id=? AND ticket_id=?")
+    .get(req.params.attachmentId, t.id);
+  if (!attachment)
+    return res.status(404).json({ error: "Pièce jointe introuvable." });
+  res.download(
+    join(store.directory, "attachments", attachment.filename),
+    attachment.name,
+  );
+});
+app.get("/api/tickets/:id/archive", (req, res) => {
+  const t = store.ticket(Number(req.params.id));
+  if (!canReadTicket(req.actor, t) || t.status !== "closed")
     return res.status(404).json({ error: "Archive introuvable." });
   res
     .attachment(`ticket-${t.id}.json`)
-    .json({ ticket: t, messages: store.messages(t.id) });
+    .json({
+      ticket: t,
+      messages: store.messages(t.id),
+      responses: store.responses(t.id),
+    });
 });
-for (const action of ["claim", "close", "reply"])
+app.post(
+  "/api/tickets/:id/accept",
+  asyncRoute(async (req, res) => {
+    const t = store.ticket(Number(req.params.id));
+    if (!t || t.user_id !== req.actor.id)
+      return res.status(404).json({ error: "Ticket introuvable." });
+    if (!Number.isInteger(req.body.solutionId))
+      throw Error("Solution requise.");
+    res.json(await bot.closeTicket(t.id, req.actor.id, req.body.solutionId));
+  }),
+);
+app.post(
+  "/api/tickets/:id/close",
+  adminOnly,
+  asyncRoute(async (req, res) => {
+    if (req.body.confirm !== true)
+      throw Error("Confirmation de clôture administrative requise.");
+    res.json(await bot.closeTicket(Number(req.params.id), req.actor.id));
+  }),
+);
+app.post(
+  "/api/tickets/:id/cleanup",
+  supportOnly,
+  asyncRoute(async (req, res) => {
+    await bot.deleteArchivedChannel(Number(req.params.id));
+    res.json({ ok: true });
+  }),
+);
+for (const action of ["claim", "reply"])
   app.post(
     `/api/tickets/:id/${action}`,
     supportOnly,
     asyncRoute(async (req, res) => {
       const id = Number(req.params.id);
       if (action === "claim") await bot.claimTicket(id, req.actor.id);
-      else if (action === "close") await bot.closeTicket(id, req.actor.id);
-      else await bot.replyTicket(id, req.body.content, req.actor.id);
+      else
+        await bot.replyTicket(
+          id,
+          req.body.content,
+          req.actor.id,
+          req.body.kind,
+        );
       res.json({ ok: true });
     }),
   );
@@ -337,7 +418,10 @@ app.post(
 );
 app.get("/api/audit", adminOnly, (_, res) =>
   res.json(
-    store.db.prepare("SELECT * FROM audit ORDER BY id DESC LIMIT 100").all(),
+    store.db
+      .prepare("SELECT * FROM audit ORDER BY id DESC LIMIT 100")
+      .all()
+      .map((row) => describeAudit(row, store, bot.client)),
   ),
 );
 app.use(express.static(fileURLToPath(new URL("../public", import.meta.url))));
