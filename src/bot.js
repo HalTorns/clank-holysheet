@@ -1,3 +1,4 @@
+import { configuredGuild, logDiscordError } from "./discord-errors.js";
 import {
   Client,
   GatewayIntentBits,
@@ -34,7 +35,7 @@ export function createBot(store, env) {
     ],
     partials: [Partials.Message, Partials.Channel],
   });
-  const guild = () => client.guilds.fetch(env.DISCORD_GUILD_ID);
+  const guild = () => configuredGuild(client, env.DISCORD_GUILD_ID);
   const locks = new Set();
   async function locked(key, fn) {
     if (locks.has(key)) throw Error("Une opération est déjà en cours.");
@@ -309,19 +310,17 @@ export function createBot(store, env) {
         permissionOverwrites: [
           { id: g.id, deny: [P.ViewChannel] },
           botOverwrite(),
-          ...[c.teamRoleId, c.adminRoleId]
-            .filter(Boolean)
-            .map((id) => ({
-              id,
-              allow: [
-                P.ViewChannel,
-                P.SendMessages,
-                P.ReadMessageHistory,
-                P.AttachFiles,
-                P.Connect,
-                P.Speak,
-              ],
-            })),
+          ...[c.teamRoleId, c.adminRoleId].filter(Boolean).map((id) => ({
+            id,
+            allow: [
+              P.ViewChannel,
+              P.SendMessages,
+              P.ReadMessageHistory,
+              P.AttachFiles,
+              P.Connect,
+              P.Speak,
+            ],
+          })),
           {
             id: actor,
             allow: [
@@ -437,7 +436,7 @@ export function createBot(store, env) {
       .run(ch.id);
   });
   client.on("interactionCreate", async (i) => {
-    if (i.guildId !== env.DISCORD_GUILD_ID) return;
+    if (i.guildId !== String(env.DISCORD_GUILD_ID || "").trim()) return;
     try {
       const c = store.config();
       if (i.isStringSelectMenu() && i.customId === "ticket:theme") {
@@ -648,7 +647,11 @@ export function createBot(store, env) {
   });
   client.once("clientReady", async () => {
     console.log("Clank connecté à Discord.");
+    let stage = "Accès au serveur configuré";
     try {
+      const targetGuild = await guild();
+      console.log(`[Clank] Accès au serveur ${targetGuild.id} confirmé.`);
+      stage = "Publication de la commande /projet";
       const command = new SlashCommandBuilder()
         .setName("projet")
         .setDescription("Gérer les projets Holysheet")
@@ -695,15 +698,14 @@ export function createBot(store, env) {
               o.setName("id").setDescription("ID du projet").setRequired(true),
             ),
         );
-      await (await guild()).commands.create(command);
+      await targetGuild.commands.create(command);
+      console.log("[Clank] Commande /projet publiée.");
       for (const t of store.tickets().filter((t) => t.status === "open"))
         await snapshot(t).catch(() =>
           console.error(`Rattrapage impossible pour le ticket ${t.id}.`),
         );
-    } catch {
-      console.error(
-        "Initialisation Discord incomplète : vérifier les permissions et le serveur.",
-      );
+    } catch (error) {
+      logDiscordError(stage, error);
     }
   });
   return {

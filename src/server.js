@@ -5,6 +5,7 @@ import { randomBytes, timingSafeEqual } from "node:crypto";
 import { fileURLToPath } from "node:url";
 import { createStore, validateConfig } from "./store.js";
 import { createBot } from "./bot.js";
+import { discordErrorInfo, logDiscordError } from "./discord-errors.js";
 import { PermissionFlagsBits as P, ChannelType } from "discord.js";
 
 const env = process.env,
@@ -60,17 +61,18 @@ async function identity(req, res, next) {
     if (!session?.user)
       return res.status(401).json({ error: "Connexion Discord requise." });
     if (!bot.client.isReady())
-      return res
-        .status(503)
-        .json({
-          error:
-            "Le bot se connecte à Discord. Réessayez dans quelques instants.",
-        });
+      return res.status(503).json({
+        error:
+          "Le bot se connecte à Discord. Réessayez dans quelques instants.",
+      });
     const member = await (
       await bot.guild()
     ).members
       .fetch({ user: session.user.id, force: true })
-      .catch(() => null);
+      .catch((error) => {
+        if (error.code === 10007) return null;
+        throw error;
+      });
     if (!member)
       return res
         .status(403)
@@ -92,8 +94,10 @@ async function identity(req, res, next) {
     req.actor = { ...session.user, admin, support, team };
     req.session = session;
     next();
-  } catch {
-    res.status(503).json({ error: "Vérification Discord indisponible." });
+  } catch (error) {
+    logDiscordError("Vérification de l’accès au dashboard", error);
+    const detail = discordErrorInfo(error);
+    res.status(503).json({ error: detail.message, code: detail.code });
   }
 }
 function csrf(req, res, next) {
@@ -106,11 +110,9 @@ function csrf(req, res, next) {
     a.length !== b.length ||
     !timingSafeEqual(Buffer.from(a), Buffer.from(b))
   )
-    return res
-      .status(403)
-      .json({
-        error: "Session expirée ou requête non autorisée. Rechargez la page.",
-      });
+    return res.status(403).json({
+      error: "Session expirée ou requête non autorisée. Rechargez la page.",
+    });
   next();
 }
 const adminOnly = (req, res, next) =>
@@ -351,11 +353,7 @@ const server = app.listen(Number(env.PORT || 3000), "0.0.0.0", () =>
 if (env.DISCORD_BOT_TOKEN)
   bot.client
     .login(env.DISCORD_BOT_TOKEN)
-    .catch(() =>
-      console.error(
-        "Connexion du bot refusée. Vérifiez le token et Message Content Intent.",
-      ),
-    );
+    .catch((error) => logDiscordError("Connexion du bot", error));
 const shutdown = () => {
   bot.client.destroy();
   server.close(() => {
