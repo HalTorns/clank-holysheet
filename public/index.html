@@ -1,0 +1,48 @@
+<!doctype html>
+<html lang="fr">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width,initial-scale=1" />
+    <title>Clank · Holysheet</title>
+    <link rel="stylesheet" href="/style.css" />
+    <script src="/app.js" defer></script>
+  </head>
+  <body>
+    <div id="login" class="landing">
+      <span class="wordmark">clank<span>✳</span></span>
+      <p class="eyebrow">LE QG DE HOLYSHEET</p>
+      <h1>Vos projets.<br />Votre équipe.<br /><em>Le même espace.</em></h1>
+      <p class="intro">
+        Du premier cadrage au dernier ticket, Clank rassemble le travail de
+        votre équipe sur Discord.
+      </p>
+      <a class="primary" href="/auth/login">Se connecter avec Discord ↗</a>
+      <p class="muted">Accès réservé à l’équipe et au Support Holysheet.</p>
+      <div class="landing-footer">
+        HOLYSHEET / WORKSPACE <span>Projets · Support · Supervision</span>
+      </div>
+    </div>
+    <div id="workspace" hidden>
+      <aside>
+        <a class="wordmark" href="/">clank<span>✳</span></a>
+        <p class="eyebrow">HOLYSHEET WORKSPACE</p>
+        <nav id="nav"></nav>
+        <div class="sidebar-bottom">
+          <span id="username"></span
+          ><button id="logout" class="subtle">Déconnexion ↗</button>
+        </div>
+      </aside>
+      <main>
+        <header>
+          <div>
+            <p class="eyebrow">VOTRE ESPACE DE TRAVAIL</p>
+            <h1 id="heading">Vue d’ensemble</h1>
+          </div>
+          <span class="badge">● Discord connecté</span>
+        </header>
+        <div id="content"></div>
+      </main>
+    </div>
+    <div id="notice" role="status" hidden></div>
+  </body>
+</html>

@@ -1,0 +1,19 @@
+services:
+  clank:
+    build: .
+    restart: unless-stopped
+    expose:
+      - "3000"
+    environment:
+      NODE_ENV: production
+      PUBLIC_URL: https://clank.holysheet.fr
+      DISCORD_CLIENT_ID: ${DISCORD_CLIENT_ID}
+      DISCORD_CLIENT_SECRET: ${DISCORD_CLIENT_SECRET}
+      DISCORD_BOT_TOKEN: ${DISCORD_BOT_TOKEN}
+      DISCORD_GUILD_ID: ${DISCORD_GUILD_ID}
+      ADMIN_USER_IDS: ${ADMIN_USER_IDS}
+      DATA_DIR: /app/data
+    volumes:
+      - clank-data:/app/data
+volumes:
+  clank-data:
